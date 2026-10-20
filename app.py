@@ -4,6 +4,7 @@
 """
 
 import sqlite3
+from contextlib import closing
 
 
 def _prepare_db(connection: sqlite3.Connection) -> None:
@@ -25,18 +26,46 @@ def _prepare_db(connection: sqlite3.Connection) -> None:
     )
 
 
+def _validate_event(event: dict) -> tuple[dict[str, str] | None, str | None]:
+    if not isinstance(event, dict):
+        return None, "Событие должно быть словарём"
+
+    fields: dict[str, str] = {}
+    for name in ("source", "external_id", "customer", "message"):
+        value = event.get(name)
+        if not isinstance(value, str):
+            return None, f"Поле '{name}' должно быть строкой"
+        if not value.strip():
+            return None, f"Поле '{name}' не должно быть пустым"
+        fields[name] = value.strip()
+    return fields, None
+
+
 def process_event(event: dict, db_path: str) -> dict:
     """Принимает событие и возвращает dict со статусом и, при успехе, id заявки.
 
     Контракт статусов и бизнес-правила описаны в README.md.
     """
-    with sqlite3.connect(db_path) as connection:
-        _prepare_db(connection)
+    fields, reason = _validate_event(event)
+    if fields is None:
+        return {"status": "invalid", "reason": reason}
 
-        source = event.get("source", "")
-        external_id = event.get("external_id", "")
-        customer = event.get("customer", "")
-        message = event.get("message", "")
+    with closing(sqlite3.connect(db_path)) as connection:
+        _prepare_db(connection)
+        connection.execute("BEGIN IMMEDIATE")
+
+        source = fields["source"]
+        external_id = fields["external_id"]
+        customer = fields["customer"]
+        message = fields["message"]
+
+        existing = connection.execute(
+            "SELECT id FROM leads WHERE source = ? AND external_id = ? ORDER BY id LIMIT 1",
+            (source, external_id),
+        ).fetchone()
+        if existing is not None:
+            connection.commit()
+            return {"status": "duplicate", "id": existing[0]}
 
         cursor = connection.execute(
             """
