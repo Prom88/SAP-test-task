@@ -37,6 +37,7 @@ def _validate_event(event: dict) -> tuple[dict[str, str] | None, str | None]:
             return None, f"Поле '{name}' должно быть строкой"
         if not value.strip():
             return None, f"Поле '{name}' не должно быть пустым"
+        # Нормализованное значение используется при поиске дубликатов и сохранении.
         fields[name] = value.strip()
     return fields, None
 
@@ -52,6 +53,7 @@ def process_event(event: dict, db_path: str) -> dict:
 
     with closing(sqlite3.connect(db_path)) as connection:
         _prepare_db(connection)
+        # Блокируем конкурирующие вызовы, чтобы два повтора не создали отдельные заявки.
         connection.execute("BEGIN IMMEDIATE")
 
         source = fields["source"]
@@ -65,6 +67,7 @@ def process_event(event: dict, db_path: str) -> dict:
         ).fetchone()
         if existing is not None:
             connection.commit()
+            # Сохраняем исходные данные заявки и не создаём повторное уведомление.
             return {"status": "duplicate", "id": existing[0]}
 
         cursor = connection.execute(
